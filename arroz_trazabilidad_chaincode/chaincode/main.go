@@ -9,10 +9,11 @@ import (
 
 // === Modelo ===
 type Tolva struct {
-	ID          string `json:"id"`     // identificador único
+	DocType     string `json:"docType"` // fijo: "tolva" (útil para CouchDB)
+	ID          string `json:"id"`
 	Fecha       string `json:"fecha"`  // yyyy-mm-dd
 	NOrden      string `json:"nOrden"` // número de orden
-	NChapa      string `json:"nChapa"` // patente del camión
+	NChapa      string `json:"nChapa"`
 	Chofer      string `json:"chofer"`
 	Origen      string `json:"origen"`
 	Variedad    string `json:"variedad"`
@@ -26,7 +27,7 @@ type SmartContract struct {
 	contractapi.Contract
 }
 
-// RegistrarTolva: alta de una tolva
+// RegistrarTolva: crea una nueva tolva si no existe
 func (s *SmartContract) RegistrarTolva(ctx contractapi.TransactionContextInterface, tolvaJSON string) error {
 	var t Tolva
 	if err := json.Unmarshal([]byte(tolvaJSON), &t); err != nil {
@@ -42,12 +43,57 @@ func (s *SmartContract) RegistrarTolva(ctx contractapi.TransactionContextInterfa
 	if exists {
 		return fmt.Errorf("la tolva %s ya existe", t.ID)
 	}
+	if t.DocType == "" {
+		t.DocType = "tolva"
+	}
 
-	b, _ := json.Marshal(t)
-	if err := ctx.GetStub().PutState("TOLVA_"+t.ID, b); err != nil {
+	data, _ := json.Marshal(t)
+	if err := ctx.GetStub().PutState("TOLVA_"+t.ID, data); err != nil {
 		return fmt.Errorf("error al guardar tolva: %v", err)
 	}
-	return ctx.GetStub().SetEvent("RegistrarTolva", b)
+	return ctx.GetStub().SetEvent("RegistrarTolva", data)
+}
+
+// EditarTolva: actualiza una tolva existente (nuevo estado, no modifica el histórico del ledger)
+func (s *SmartContract) EditarTolva(ctx contractapi.TransactionContextInterface, tolvaJSON string) error {
+	var nueva Tolva
+	if err := json.Unmarshal([]byte(tolvaJSON), &nueva); err != nil {
+		return fmt.Errorf("JSON inválido: %v", err)
+	}
+	if nueva.ID == "" {
+		return fmt.Errorf("el campo 'id' es obligatorio")
+	}
+	exists, err := s.TolvaExiste(ctx, nueva.ID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("no se puede editar, la tolva %s no existe", nueva.ID)
+	}
+	if nueva.DocType == "" {
+		nueva.DocType = "tolva"
+	}
+
+	data, _ := json.Marshal(nueva)
+	if err := ctx.GetStub().PutState("TOLVA_"+nueva.ID, data); err != nil {
+		return err
+	}
+	return ctx.GetStub().SetEvent("EditarTolva", data)
+}
+
+// EliminarTolva: elimina del world state (el histórico queda en el ledger)
+func (s *SmartContract) EliminarTolva(ctx contractapi.TransactionContextInterface, id string) error {
+	exists, err := s.TolvaExiste(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("no se puede eliminar, la tolva %s no existe", id)
+	}
+	if err := ctx.GetStub().DelState("TOLVA_" + id); err != nil {
+		return fmt.Errorf("error al eliminar tolva %s: %v", id, err)
+	}
+	return ctx.GetStub().SetEvent("EliminarTolva", []byte(id))
 }
 
 // ConsultarTolva: obtiene por ID
@@ -66,9 +112,45 @@ func (s *SmartContract) ConsultarTolva(ctx contractapi.TransactionContextInterfa
 	return &t, nil
 }
 
-// ListarTolvas: devuelve todas (búsqueda por prefijo)
+// ListarTolvas: consulta rica (todas las de docType=tolva)
 func (s *SmartContract) ListarTolvas(ctx contractapi.TransactionContextInterface) ([]Tolva, error) {
-	it, err := ctx.GetStub().GetStateByRange("TOLVA_", "TOLVA_~") // ~ > zzz...
+	q := `{"selector":{"docType":"tolva"}}`
+	return s.queryTolvas(ctx, q)
+}
+
+func (s *SmartContract) BuscarTolvas(ctx contractapi.TransactionContextInterface, filtrosJSON string) ([]Tolva, error) {
+	var filtros map[string]interface{}
+	if err := json.Unmarshal([]byte(filtrosJSON), &filtros); err != nil {
+		return nil, fmt.Errorf("filtros inválidos: %v", err)
+	}
+
+	selector := map[string]interface{}{
+		"docType": "tolva",
+	}
+	for k, v := range filtros {
+		selector[k] = v
+	}
+
+	query := map[string]interface{}{
+		"selector": selector,
+	}
+	queryBytes, _ := json.Marshal(query)
+
+	return s.queryTolvas(ctx, string(queryBytes))
+}
+
+// --- helpers ---
+
+func (s *SmartContract) TolvaExiste(ctx contractapi.TransactionContextInterface, id string) (bool, error) {
+	data, err := ctx.GetStub().GetState("TOLVA_" + id)
+	if err != nil {
+		return false, err
+	}
+	return data != nil, nil
+}
+
+func (s *SmartContract) queryTolvas(ctx contractapi.TransactionContextInterface, query string) ([]Tolva, error) {
+	it, err := ctx.GetStub().GetQueryResult(query)
 	if err != nil {
 		return nil, err
 	}
@@ -87,15 +169,6 @@ func (s *SmartContract) ListarTolvas(ctx contractapi.TransactionContextInterface
 		out = append(out, t)
 	}
 	return out, nil
-}
-
-// helper
-func (s *SmartContract) TolvaExiste(ctx contractapi.TransactionContextInterface, id string) (bool, error) {
-	data, err := ctx.GetStub().GetState("TOLVA_" + id)
-	if err != nil {
-		return false, err
-	}
-	return data != nil, nil
 }
 
 func main() {
