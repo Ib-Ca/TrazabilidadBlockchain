@@ -1,0 +1,6 @@
+{
+  "index": { "fields": ["docType", "fecha", "origen"] },
+  "ddoc": "idxTolva",
+  "name": "idxDocTypeFechaOrigen",
+  "type": "json"
+}
